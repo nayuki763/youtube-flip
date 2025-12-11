@@ -175,6 +175,36 @@ function createOrLoadPlayer(videoId){
   // 既存を破棄
   destroyPlayer();
 
+  function resetControls() {
+  // 速度を 1.00x に戻す
+  speedSelect.value = "1.00";
+  speedActive.textContent = "1.00x";
+  speedActive.style.fontWeight = "900";
+
+  // 再生ボタン表示
+  playPauseBtn.textContent = "▶ 再生";
+
+  // 通常ループ解除
+  loopChk.checked = false;
+
+  // A-B 解除
+  abLoopActive = false;
+  A = null;
+  B = null;
+  pointA.value = "";
+  pointB.value = "";
+
+  // シーク位置リセット
+  posSlider.value = 0;
+  timeLabel.textContent = "0:00 / 0:00";
+
+  // ミラー反転解除
+  mirrorRequested = false;
+  const iframe = iframeBox.querySelector("iframe");
+  if (iframe) iframe.style.transform = "scaleX(1)";
+}
+  resetControls();
+  
   // コンテナ作成
   const div = document.createElement('div');
   div.id = 'ytplayer';
@@ -344,6 +374,7 @@ window.addEventListener('beforeunload', ()=>{ destroyPlayer(); });
 </script>
 </body>
 </html>
+
 
 
 
