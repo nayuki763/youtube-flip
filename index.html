@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>YouTube Reverse Player — fixed layout</title>
+<style>
+  body{font-family:system-ui, -apple-system, "Hiragino Kaku Gothic ProN","Yu Gothic","メイリオ",sans-serif; padding:20px; background:#f6f7fb; color:#111}
+  .container{max-width:980px;margin:0 auto}
+  label{display:inline-block;margin-right:10px}
+  input[type=text]{width:60%;padding:8px;font-size:14px}
+  button, select{padding:8px 12px;margin-left:6px;font-size:14px}
+  .player-wrap{margin-top:18px; width:100%; height:540px; background:#000; display:flex; align-items:center; justify-content:center; overflow:hidden}
+  .iframe-box{width:100%; height:100%; transform-origin:center center;}
+  .controls{margin-top:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+  .slider{width:60%}
+  .small{font-size:13px}
+  .note{margin-top:14px;color:#555}
+  .speed-active{font-weight:700;margin-left:8px}
+  /* small responsive */
+  @media(max-width:720px){ input[type=text]{width:100%} .slider{width:100%} }
+</style>
+</head>
+<body>
+  <div class="container">
+    <h1>YouTube 反転プレーヤー</h1>
+    <p>使い方: YouTubeの動画URLを貼って「読み込む」を押してください。区間ループは秒数を指定することで使用できます。</p>
+
+    <div>
+      <label>動画リンク/ID</label>
+      <input id="urlInput" type="text" placeholder="https://www.youtube.com/watch?v=VIDEO_ID など" />
+      <button id="loadBtn">読み込む</button>
+      <button id="unloadBtn">読み込み解除</button>
+    </div>
+
+    <div class="player-wrap">
+      <div id="iframeBox" class="iframe-box"></div>
+    </div>
+
+    <div class="controls">
+      <button id="playPauseBtn">▶ 再生</button>
+      <button id="reverseBtn">⏪ 逆再生</button>
+      <button id="mirrorBtn">左右反転</button>
+
+      <label class="small">ループ:
+        <input id="loopChk" type="checkbox" />
+      </label>
+
+      <label class="small">速度:
+        <select id="speedSelect"></select>
+        <span id="speedActive" class="speed-active">1.00x</span>
+      </label>
+
+      <label class="small">再生位置:
+        <input id="posSlider" class="slider" type="range" min="0" max="100" value="0" />
+      </label>
+
+      <span id="timeLabel" class="small">0:00 / 0:00</span>
+    </div>
+
+    <div class="controls" style="margin-top:8px;">
+      <label class="small">始まり:
+        <input id="pointA" type="number" min="0" step="0.1" style="width:80px" />
+      </label>
+      <label class="small">終わり:
+        <input id="pointB" type="number" min="0" step="0.1" style="width:80px" />
+      </label>
+      <button id="setAB">区間ループ開始</button>
+      <button id="clearAB">区間ループ解除</button>
+    </div>
+
+    <p class="note">注意: このページはYouTubeの埋め込みプレーヤー（IFrame Player API）を利用します。埋め込みが許可されていない動画は再生することができません。</p>
+  </div>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+/* ---------- 状態変数 ---------- */
+let player = null;
+let reverseInterval = null;
+let pollTimer = null;
+let abLoopActive = false;
+let A = null, B = null;
+let mirrorRequested = false; // iframe未生成時の反転要求フラグ
+
+/* ---------- DOM ---------- */
+const urlInput = document.getElementById('urlInput');
+const loadBtn = document.getElementById('loadBtn');
+const unloadBtn = document.getElementById('unloadBtn');
+const iframeBox = document.getElementById('iframeBox');
+const playPauseBtn = document.getElementById('playPauseBtn');
+const reverseBtn = document.getElementById('reverseBtn');
+const mirrorBtn = document.getElementById('mirrorBtn');
+const loopChk = document.getElementById('loopChk');
+const speedSelect = document.getElementById('speedSelect');
+const speedActive = document.getElementById('speedActive');
+const posSlider = document.getElementById('posSlider');
+const timeLabel = document.getElementById('timeLabel');
+const pointA = document.getElementById('pointA');
+const pointB = document.getElementById('pointB');
+const setAB = document.getElementById('setAB');
+const clearAB = document.getElementById('clearAB');
+
+/* ---------- ユーティリティ ---------- */
+function extractVideoID(input){
+  if(!input) return null;
+  const patterns = [
+    /(?:v=|&v=)([A-Za-z0-9_-]{11})/,
+    /youtu\.be\/([A-Za-z0-9_-]{11})/,
+    /embed\/([A-Za-z0-9_-]{11})/,
+    /^([A-Za-z0-9_-]{11})$/
+  ];
+  for(const p of patterns){
+    const m = input.match(p);
+    if(m && m[1]) return m[1];
+  }
+  return null;
+}
+function fmtTime(s){
+  s = Math.max(0, Math.floor(s));
+  const m = Math.floor(s/60), sec = s%60;
+  return m + ':' + String(sec).padStart(2,'0');
+}
+
+/* ---------- Speed セレクト構築（固定リスト & 2.5x刻みは星印） ---------- */
+function buildSpeedOptions() {
+  const speeds = [
+    0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1.0,
+    1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0
+  ];
+
+  speedSelect.innerHTML = '';
+
+  speeds.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s.toFixed(2);   // ← ★ 必ず文字列 "1.00" 形式に統一
+    const isQuarter = Math.abs(s * 4 - Math.round(s * 4)) < 1e-6;
+    opt.textContent = isQuarter
+      ? `${s.toFixed(2)}x ★`
+      : `${s.toFixed(2)}x`;
+    speedSelect.appendChild(opt);
+  });
+
+  // デフォルトを 1.00 に設定
+  speedSelect.value = "1.00";
+  speedActive.textContent = "1.00x";
+  speedActive.style.fontWeight = '900';
+}
+buildSpeedOptions();
+
+
+
+/* ---------- YouTube IFrame API ---------- */
+function onYouTubeIframeAPIReady(){ /* API読み込み完了 */ }
+
+/* プレーヤー生成/読み込み */
+loadBtn.addEventListener('click', ()=>{
+  let input = urlInput.value.trim();
+
+  // shorts URL を watch?v= に変換
+  if (input.includes("shorts/")) {
+    const id = input.split("shorts/")[1].split("?")[0];
+    input = "https://www.youtube.com/watch?v=" + id;
+  }
+
+  const id = extractVideoID(input);
+  if(!id){ alert('動画IDが見つかりません。URLまたはIDを確認してください。'); return; }
+  createOrLoadPlayer(id);
+});
+unloadBtn.addEventListener('click', destroyPlayer);
+
+function createOrLoadPlayer(videoId){
+  // 既存を破棄
+  destroyPlayer();
+
+  // コンテナ作成
+  const div = document.createElement('div');
+  div.id = 'ytplayer';
+  div.style.width = '100%';
+  div.style.height = '100%';
+  iframeBox.appendChild(div);
+
+  player = new YT.Player('ytplayer', {
+    width: '100%', height: '100%',
+    videoId: videoId,
+    playerVars: { rel:0, playsinline:1, origin: window.location.origin, enablejsapi:1 },
+    events: {
+      onReady: (e) => {
+        // speed 適用
+        try{ player.setPlaybackRate(parseFloat(speedSelect.value)); }catch(e){}
+        // 反転要求があれば適用
+        applyMirrorIfNeeded();
+        startPoll();
+      },
+      onStateChange: onPlayerStateChange
+    }
+  });
+}
+
+function destroyPlayer(){
+  stopReverseIfOn();
+  if(pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+  if(player && typeof player.destroy === 'function'){ try{ player.destroy(); }catch(e){} }
+  player = null;
+  iframeBox.innerHTML = '';
+  posSlider.value = 0;
+  timeLabel.textContent = '0:00 / 0:00';
+  abLoopActive = false; A = B = null;
+}
+
+/* ---------- 再生/停止 ---------- */
+playPauseBtn.addEventListener('click', ()=>{
+  if(!player) return;
+  const state = player.getPlayerState ? player.getPlayerState() : -1;
+  // YT.PlayerState.PLAYING === 1, PAUSED === 2
+  if(state === YT && false){ /* noop to keep linter quiet */ }
+  if(state === 1){ // playing -> pause
+    try{ player.pauseVideo(); }catch(e){}
+    playPauseBtn.textContent = '▶ 再生';
+  } else { // otherwise play
+    stopReverseIfOn();
+    try{ player.playVideo(); }catch(e){}
+    playPauseBtn.textContent = '⏸ 停止';
+  }
+});
+
+/* ---------- 逆再生 ---------- */
+reverseBtn.addEventListener('click', ()=>{
+  if(!player) return;
+  if(reverseInterval){ stopReverseIfOn(); return; }
+  startReverse();
+});
+
+function startReverse(){
+  stopReverseIfOn();
+  // pause then step backwards
+  try{ player.pauseVideo(); }catch(e){}
+  const tickMs = 90;
+  reverseInterval = setInterval(()=>{
+    if(!player || typeof player.getCurrentTime !== 'function') return;
+    try{
+      const cur = player.getCurrentTime();
+      const step = 0.08;
+      const next = Math.max(0, cur - step);
+      player.seekTo(next, true);
+      if(next === 0) stopReverseIfOn();
+    }catch(e){}
+  }, tickMs);
+}
+
+function stopReverseIfOn(){
+  if(reverseInterval){ clearInterval(reverseInterval); reverseInterval = null; }
+}
+
+/* ---------- 鏡像反転ボタン ---------- */
+mirrorBtn.addEventListener('click', ()=>{
+  mirrorRequested = !mirrorRequested;
+  applyMirrorIfNeeded();
+});
+
+function applyMirrorIfNeeded(){
+  const iframe = iframeBox.querySelector('iframe');
+  if(!iframe){
+    // iframe未生成時はフラグを残す
+    return;
+  }
+  iframe.style.transform = mirrorRequested ? 'scaleX(-1)' : 'scaleX(1)';
+}
+
+/* ---------- 速度制御 ---------- */
+speedSelect.addEventListener('change', ()=>{
+  const v = parseFloat(speedSelect.value);
+  speedActive.textContent = v.toFixed(2) + 'x';
+  // 強調（0.25倍数は太字に）
+  const isQuarter = Math.abs(v*4 - Math.round(v*4)) < 1e-6;
+  speedActive.style.fontWeight = isQuarter ? '900' : '400';
+  if(player && typeof player.setPlaybackRate === 'function'){
+    try{ player.setPlaybackRate(v); }catch(e){}
+  }
+});
+
+/* ---------- シーク・ポーリング ---------- */
+posSlider.addEventListener('input', ()=>{
+  if(!player || typeof player.getDuration !== 'function') return;
+  const pct = parseFloat(posSlider.value);
+  const dur = player.getDuration() || 0;
+  const t = dur * (pct/100);
+  try{ player.seekTo(t, true); }catch(e){}
+  updateTimeLabel(t, dur);
+});
+
+function startPoll(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(()=>{
+    if(!player || typeof player.getDuration !== 'function') return;
+    const dur = player.getDuration() || 0;
+    const cur = player.getCurrentTime ? player.getCurrentTime() : 0;
+    if(dur > 0) posSlider.value = (cur/dur) * 100;
+    updateTimeLabel(cur, dur);
+    // ABループ監視
+    if(abLoopActive && A != null && B != null && cur > B){
+      try{ player.seekTo(A, true); }catch(e){}
+    }
+  }, 250);
+}
+
+function updateTimeLabel(cur, dur){
+  timeLabel.textContent = fmtTime(cur) + ' / ' + fmtTime(dur);
+}
+
+/* ---------- ループ（通常） ---------- */
+loopChk.addEventListener('change', ()=>{ /* handled in onStateChange */ });
+
+/* ---------- A-B 区間ループ ---------- */
+setAB.addEventListener('click', ()=>{
+  const a = parseFloat(pointA.value), b = parseFloat(pointB.value);
+  if(isNaN(a) || isNaN(b) || a >= b){ alert('A < B で設定してください'); return; }
+  A = a; B = b; abLoopActive = true;
+  if(player && typeof player.seekTo === 'function') try{ player.seekTo(A, true); }catch(e){}
+});
+clearAB.addEventListener('click', ()=>{ abLoopActive = false; A = B = null; });
+
+/* ---------- プレーヤー状態変更検知 ---------- */
+function onPlayerStateChange(e){
+  // 終了時の通常ループ
+  if(e.data === YT.PlayerState.ENDED){
+    if(loopChk.checked){
+      if(player && typeof player.seekTo === 'function'){ try{ player.seekTo(0, true); player.playVideo(); }catch(e){} }
+    } else {
+      stopReverseIfOn();
+      playPauseBtn.textContent = '▶ 再生';
+    }
+  }
+}
+
+/* ---------- ヘルパー ---------- */
+function fmtTime(s){ s = Math.max(0, Math.floor(s)); const m = Math.floor(s/60); const sec = s%60; return m+':'+String(sec).padStart(2,'0'); }
+
+/* Cleanup on unload */
+window.addEventListener('beforeunload', ()=>{ destroyPlayer(); });
+
+</script>
+</body>
+</html>
