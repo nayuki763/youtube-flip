@@ -296,7 +296,7 @@ function applyMirrorIfNeeded(){
     // iframe未生成時はフラグを残す
     return;
   }
-  iframe.style.transform = mirrorRequested ? 'scaleX(-1)' : 'scaleX(1)';
+  iframe.style.scale = mirrorRequested ? '-1 1' : '1 1';
 }
 
 /* ---------- 速度制御 ---------- */
@@ -374,6 +374,7 @@ window.addEventListener('beforeunload', ()=>{ destroyPlayer(); });
 </script>
 </body>
 </html>
+
 
 
 
