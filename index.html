@@ -165,6 +165,12 @@ loadBtn.addEventListener('click', ()=>{
     input = "https://www.youtube.com/watch?v=" + id;
   }
 
+  // shorts URL を watch?v= に変換
+  if (input.includes("live/")) {
+    const id = input.split("live/")[1].split("?")[0];
+    input = "https://www.youtube.com/watch?v=" + id;
+  }
+
   const id = extractVideoID(input);
   if(!id){ alert('動画IDが見つかりません。URLまたはIDを確認してください。'); return; }
   createOrLoadPlayer(id);
@@ -374,7 +380,6 @@ window.addEventListener('beforeunload', ()=>{ destroyPlayer(); });
 </script>
 </body>
 </html>
-
 
 
 
