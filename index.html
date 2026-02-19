@@ -359,7 +359,17 @@ mirrorBtn.addEventListener('click', ()=>{
 });
 
 function applyMirrorIfNeeded(){
-  // iframeBoxに反転スタイルを適用（全画面時でも維持される）
+  // 全画面要素（存在する場合）に反転を適用
+  const fullscreenElem = document.fullscreenElement;
+  if(fullscreenElem){
+    if(mirrorRequested){
+      fullscreenElem.style.transform = 'scaleX(-1)';
+    } else {
+      fullscreenElem.style.transform = 'scaleX(1)';
+    }
+  }
+  
+  // 通常時のiframeBoxにも反転を適用
   if(mirrorRequested){
     iframeBox.style.transform = 'scaleX(-1)';
   } else {
