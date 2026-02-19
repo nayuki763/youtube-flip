@@ -20,6 +20,13 @@
   .small{font-size:13px}
   .note{margin-top:14px;color:#555}
   .speed-active{font-weight:700;margin-left:8px}
+  .preset-item{background:#fff;border:1px solid #ddd;padding:10px;margin:8px 0;border-radius:4px;display:flex;justify-content:space-between;align-items:center}
+  .preset-info{flex:1}
+  .preset-info-title{font-weight:600;margin-bottom:4px}
+  .preset-info-details{font-size:12px;color:#666}
+  .preset-actions{display:flex;gap:6px}
+  .preset-actions button{padding:4px 8px;font-size:12px}
+  .mirror-active{background-color:#696969;color:#fff}
   /* small responsive */
   @media(max-width:720px){ input[type=text]{width:100%} .slider{width:100%} }
 </style>
@@ -63,16 +70,29 @@
 
     <div class="controls" style="margin-top:8px;">
       <label class="small">始まり:
-        <input id="pointA" type="number" min="0" step="0.1" style="width:80px" />
+        <input id="pointA" type="text" placeholder="0:00" style="width:70px" />
+        <button id="setAFromCurrent" title="現在の再生位置を始まりに設定">↩</button>
       </label>
       <label class="small">終わり:
-        <input id="pointB" type="number" min="0" step="0.1" style="width:80px" />
+        <input id="pointB" type="text" placeholder="0:00" style="width:70px" />
+        <button id="setBFromCurrent" title="現在の再生位置を終わりに設定">↩</button>
       </label>
       <button id="setAB">区間ループ開始</button>
       <button id="clearAB">区間ループ解除</button>
     </div>
 
+    <div class="controls" style="margin-top:12px; border-top:1px solid #ccc; padding-top:12px;">
+      <label class="small">設定名:
+        <input id="presetName" type="text" placeholder="設定の名前を入力" style="width:150px" />
+      </label>
+      <button id="savePresetBtn">💾 設定を保存</button>
+      <button id="clearPresetsBtn">🗑️ 全て削除</button>
+    </div>
+
+    <div id="presetsContainer" style="margin-top:12px;"></div>
+
     <p class="note">注意: このページはYouTubeの埋め込みプレーヤー（IFrame Player API）を利用します。埋め込みが許可されていない動画は再生することができません。</p>
+    <p class="note">YouTube Flip Player ver.1.0.2: Copyright © 2025-2026 nayuki</p>
   </div>
 
 <script src="https://www.youtube.com/iframe_api"></script>
@@ -100,8 +120,17 @@ const posSlider = document.getElementById('posSlider');
 const timeLabel = document.getElementById('timeLabel');
 const pointA = document.getElementById('pointA');
 const pointB = document.getElementById('pointB');
+const setAFromCurrent = document.getElementById('setAFromCurrent');
+const setBFromCurrent = document.getElementById('setBFromCurrent');
 const setAB = document.getElementById('setAB');
 const clearAB = document.getElementById('clearAB');
+const presetName = document.getElementById('presetName');
+const savePresetBtn = document.getElementById('savePresetBtn');
+const clearPresetsBtn = document.getElementById('clearPresetsBtn');
+const presetsContainer = document.getElementById('presetsContainer');
+
+/* ---------- ローカルストレージ キー ---------- */
+const STORAGE_KEY = 'youtubeFlipPresets';
 
 /* ---------- ユーティリティ ---------- */
 function extractVideoID(input){
@@ -122,6 +151,23 @@ function fmtTime(s){
   s = Math.max(0, Math.floor(s));
   const m = Math.floor(s/60), sec = s%60;
   return m + ':' + String(sec).padStart(2,'0');
+}
+
+// 時間文字列（分:秒形式）を秒数に変換
+function parseTimeStr(str){
+  if(!str) return null;
+  str = str.trim();
+  const parts = str.split(':');
+  if(parts.length === 1){
+    const s = parseFloat(parts[0]);
+    return isNaN(s) ? null : s;
+  } else if(parts.length === 2){
+    const m = parseInt(parts[0], 10);
+    const s = parseFloat(parts[1]);
+    if(isNaN(m) || isNaN(s)) return null;
+    return m * 60 + s;
+  }
+  return null;
 }
 
 /* ---------- Speed セレクト構築（固定リスト & 2.5x刻みは星印） ---------- */
@@ -177,7 +223,7 @@ loadBtn.addEventListener('click', ()=>{
 });
 unloadBtn.addEventListener('click', destroyPlayer);
 
-function createOrLoadPlayer(videoId){
+function createOrLoadPlayer(videoId, preset = null){
   // 既存を破棄
   destroyPlayer();
 
@@ -206,10 +252,25 @@ function createOrLoadPlayer(videoId){
 
   // ミラー反転解除
   mirrorRequested = false;
-  const iframe = iframeBox.querySelector("iframe");
-  if (iframe) iframe.style.transform = "scaleX(1)";
+  mirrorBtn.classList.remove('mirror-active');
+  iframeBox.style.transform = "scaleX(1)";
 }
   resetControls();
+  
+  // プリセットがあれば設定を適用
+  if(preset) {
+    speedSelect.value = preset.speed;
+    speedActive.textContent = preset.speed + 'x';
+    const isQuarter = Math.abs(preset.speed*4 - Math.round(preset.speed*4)) < 1e-6;
+    speedActive.style.fontWeight = isQuarter ? '900' : '400';
+    loopChk.checked = preset.loop;
+    mirrorRequested = preset.mirror;
+    mirrorBtn.classList.toggle('mirror-active', mirrorRequested);
+    if(preset.pointA && preset.pointB){
+      pointA.value = preset.pointA;
+      pointB.value = preset.pointB;
+    }
+  }
   
   // コンテナ作成
   const div = document.createElement('div');
@@ -293,16 +354,17 @@ function stopReverseIfOn(){
 /* ---------- 鏡像反転ボタン ---------- */
 mirrorBtn.addEventListener('click', ()=>{
   mirrorRequested = !mirrorRequested;
+  mirrorBtn.classList.toggle('mirror-active', mirrorRequested);
   applyMirrorIfNeeded();
 });
 
 function applyMirrorIfNeeded(){
-  const iframe = iframeBox.querySelector('iframe');
-  if(!iframe){
-    // iframe未生成時はフラグを残す
-    return;
+  // iframeBoxに反転スタイルを適用（全画面時でも維持される）
+  if(mirrorRequested){
+    iframeBox.style.transform = 'scaleX(-1)';
+  } else {
+    iframeBox.style.transform = 'scaleX(1)';
   }
-  iframe.style.transform = mirrorRequested ? 'scaleX(-1)' : 'scaleX(1)';
 }
 
 /* ---------- 速度制御 ---------- */
@@ -350,13 +412,26 @@ function updateTimeLabel(cur, dur){
 loopChk.addEventListener('change', ()=>{ /* handled in onStateChange */ });
 
 /* ---------- A-B 区間ループ ---------- */
+setAFromCurrent.addEventListener('click', ()=>{
+  if(!player || typeof player.getCurrentTime !== 'function') return;
+  const cur = player.getCurrentTime();
+  pointA.value = fmtTime(cur);
+});
+
+setBFromCurrent.addEventListener('click', ()=>{
+  if(!player || typeof player.getCurrentTime !== 'function') return;
+  const cur = player.getCurrentTime();
+  pointB.value = fmtTime(cur);
+});
+
 setAB.addEventListener('click', ()=>{
-  const a = parseFloat(pointA.value), b = parseFloat(pointB.value);
-  if(isNaN(a) || isNaN(b) || a >= b){ alert('A < B で設定してください'); return; }
+  const a = parseTimeStr(pointA.value), b = parseTimeStr(pointB.value);
+  if(a === null || b === null || a >= b){ alert('A < B で設定してください（形式: 分:秒 例: 1:30）'); return; }
   A = a; B = b; abLoopActive = true;
   if(player && typeof player.seekTo === 'function') try{ player.seekTo(A, true); }catch(e){}
 });
-clearAB.addEventListener('click', ()=>{ abLoopActive = false; A = B = null; });
+
+clearAB.addEventListener('click', ()=>{ abLoopActive = false; A = B = null; pointA.value = ''; pointB.value = ''; });
 
 /* ---------- プレーヤー状態変更検知 ---------- */
 function onPlayerStateChange(e){
@@ -371,8 +446,147 @@ function onPlayerStateChange(e){
   }
 }
 
+/* ---------- 設定の保存・読み込み機能 ---------- */
+
+// 現在の設定を取得
+function getCurrentSettings(){
+  return {
+    videoUrl: urlInput.value.trim(),
+    speed: speedSelect.value,
+    loop: loopChk.checked,
+    mirror: mirrorRequested,
+    pointA: pointA.value || null,
+    pointB: pointB.value || null,
+    timestamp: new Date().toLocaleString('ja-JP')
+  };
+}
+
+// ローカルストレージから設定を取得
+function getPresetsFromStorage(){
+  const data = localStorage.getItem(STORAGE_KEY);
+  return data ? JSON.parse(data) : [];
+}
+
+// 設定をローカルストレージに保存
+function savePresetsToStorage(presets){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
+}
+
+// プリセットを保存
+savePresetBtn.addEventListener('click', ()=>{
+  const name = presetName.value.trim();
+  if(!name){ alert('設定名を入力してください'); return; }
+
+  const settings = getCurrentSettings();
+  if(!settings.videoUrl){ alert('動画URLを入力してください'); return; }
+
+  const presets = getPresetsFromStorage();
+  
+  // 同じ名前が存在する場合
+  const existingIndex = presets.findIndex(p => p.name === name);
+  if(existingIndex >= 0){
+    if(!confirm(`「${name}」は既に存在します。上書きしていいですか？`)) return;
+    presets[existingIndex] = { name, ...settings };
+  } else {
+    presets.push({ name, ...settings });
+  }
+
+  savePresetsToStorage(presets);
+  presetName.value = '';
+  renderPresets();
+});
+
+// 全設定を削除
+clearPresetsBtn.addEventListener('click', ()=>{
+  if(!confirm('保存した設定を全て削除していいですか？')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  renderPresets();
+});
+
+// プリセットを表示
+function renderPresets(){
+  const presets = getPresetsFromStorage();
+  presetsContainer.innerHTML = '';
+
+  if(presets.length === 0){
+    presetsContainer.innerHTML = '<p style="color:#999;font-size:12px;">保存された設定がありません</p>';
+    return;
+  }
+
+  const title = document.createElement('div');
+  title.style.fontWeight = 'bold';
+  title.style.marginBottom = '8px';
+  title.textContent = `保存済み設定 (${presets.length})`;
+  presetsContainer.appendChild(title);
+
+  presets.forEach((preset, index)=>{
+    const item = document.createElement('div');
+    item.className = 'preset-item';
+
+    const info = document.createElement('div');
+    info.className = 'preset-info';
+
+    const titleDiv = document.createElement('div');
+    titleDiv.className = 'preset-info-title';
+    titleDiv.textContent = preset.name;
+    info.appendChild(titleDiv);
+
+    const details = document.createElement('div');
+    details.className = 'preset-info-details';
+    let detailText = `速度: ${preset.speed}x | ループ: ${preset.loop ? 'ON' : 'OFF'} | 反転: ${preset.mirror ? 'ON' : 'OFF'}`;
+    if(preset.pointA && preset.pointB){
+      detailText += ` | 区間: ${preset.pointA}-${preset.pointB}`;
+    }
+    if(preset.timestamp){
+      detailText += ` | ${preset.timestamp}`;
+    }
+    details.textContent = detailText;
+    info.appendChild(details);
+    item.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'preset-actions';
+
+    const loadBtn = document.createElement('button');
+    loadBtn.textContent = '📂 読込';
+    loadBtn.addEventListener('click', ()=>{ loadPreset(preset); });
+    actions.appendChild(loadBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.textContent = '❌ 削除';
+    delBtn.addEventListener('click', ()=>{
+      if(!confirm(`「${preset.name}」を削除していいですか？`)) return;
+      const allPresets = getPresetsFromStorage();
+      allPresets.splice(index, 1);
+      savePresetsToStorage(allPresets);
+      renderPresets();
+    });
+    actions.appendChild(delBtn);
+
+    item.appendChild(actions);
+    presetsContainer.appendChild(item);
+  });
+}
+
+// プリセットを読み込む
+function loadPreset(preset){
+  urlInput.value = preset.videoUrl;
+  // 動画を読み込む
+  const id = extractVideoID(preset.videoUrl);
+  if(id){
+    destroyPlayer();
+    createOrLoadPlayer(id, preset);
+  }
+}
+
+// 初期表示
+renderPresets();
+
 /* ---------- ヘルパー ---------- */
 function fmtTime(s){ s = Math.max(0, Math.floor(s)); const m = Math.floor(s/60); const sec = s%60; return m+':'+String(sec).padStart(2,'0'); }
+
+/* 全画面状態変更時に反転を維持 */
+document.addEventListener('fullscreenchange', ()=>{ applyMirrorIfNeeded(); });
 
 /* Cleanup on unload */
 window.addEventListener('beforeunload', ()=>{ destroyPlayer(); });
@@ -380,9 +594,3 @@ window.addEventListener('beforeunload', ()=>{ destroyPlayer(); });
 </script>
 </body>
 </html>
-
-
-
-
-
-
