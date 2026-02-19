@@ -253,7 +253,7 @@ function createOrLoadPlayer(videoId, preset = null){
   // ミラー反転解除
   mirrorRequested = false;
   mirrorBtn.classList.remove('mirror-active');
-  iframeBox.style.transform = "scaleX(1)";
+  iframeBox.style.scale = "1";
 }
   resetControls();
   
@@ -359,21 +359,12 @@ mirrorBtn.addEventListener('click', ()=>{
 });
 
 function applyMirrorIfNeeded(){
-  // 全画面要素（存在する場合）に反転を適用
-  const fullscreenElem = document.fullscreenElement;
-  if(fullscreenElem){
-    if(mirrorRequested){
-      fullscreenElem.style.transform = 'scaleX(-1)';
-    } else {
-      fullscreenElem.style.transform = 'scaleX(1)';
-    }
-  }
-  
-  // 通常時のiframeBoxにも反転を適用
+  // iframeBoxに反転スタイルを適用
+  const ytplayer = document.getElementById('ytplayer');
   if(mirrorRequested){
-    iframeBox.style.transform = 'scaleX(-1)';
+    ytplayer.style.scale = '-1 1';
   } else {
-    iframeBox.style.transform = 'scaleX(1)';
+    ytplayer.style.scale = '1';
   }
 }
 
